@@ -58,6 +58,3 @@ examples/        OpenAI + LangChain integrations
 docs/            Attack taxonomy reference
 ```
 
-## Team
-
-Built by Team AEGIS at Cybersecurity Hackathon 2026.
