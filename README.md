@@ -92,6 +92,211 @@ python tests/test_all.py
 ```
 
 ---
+## How the JavaScript Logic Works
+
+The classifier runs entirely in the browser — no server, no API. Every prompt passes through 3 functions in order.
+```
+User Prompt → layer1PatternScore() → layer2SemanticScore() → layer3RiskScore() → PASS / FLAG / BLOCK
+```
+
+---
+
+### Layer 1 — Pattern Matching Engine
+
+Defines an array of 15 regex rules. Each rule has a pattern, attack type, danger score (0–1), and a note.
+```javascript
+const LAYER1_RULES = [
+  {
+    pattern: /ignore\s+(all\s+)?(previous|prior)\s+instructions?/i,
+    type:    "Role Override",
+    score:   0.90,
+    note:    "Classic ignore-instructions trigger phrase",
+  },
+  {
+    pattern: /you\s+are\s+now\s+(DAN|unrestricted|evil)/i,
+    type:    "Role Override",
+    score:   0.95,
+    note:    "Explicit persona reassignment attempt",
+  },
+  // ... 13 more rules
+];
+```
+
+Before scanning, it tries to **decode any base64** found in the prompt — so Token Smuggling attacks cannot hide:
+```javascript
+let decoded = null;
+const b64Match = prompt.match(/[A-Za-z0-9+\/]{20,}={0,2}/);
+if (b64Match) {
+  try { decoded = atob(b64Match[0]); } catch (e) {}
+}
+
+// Scan BOTH original prompt AND decoded version
+const targets = decoded ? [prompt, decoded] : [prompt];
+```
+
+Then loops through every rule and adds to the score on each match:
+```javascript
+let score = 0.0;
+const types = new Set();
+const findings = [];
+
+for (const target of targets) {
+  for (const rule of LAYER1_RULES) {
+    if (rule.pattern.test(target)) {
+      score = Math.min(1.0, score + rule.score * 0.7);
+      // x0.7 so multiple weak rules don't instantly max out the score
+      types.add(rule.type);
+      findings.push(rule.note);
+    }
+  }
+}
+```
+
+| Pattern Detects | Attack Type | Score |
+|---|---|---|
+| ignore previous instructions | Role Override | 0.90 |
+| you are now DAN / unrestricted | Role Override | 0.95 |
+| forget your guidelines / rules | Role Override | 0.88 |
+| repeat verbatim / word for word | Data Exfiltration | 0.85 |
+| what were your exact instructions | Data Exfiltration | 0.92 |
+| repeat system prompt | Data Exfiltration | 0.90 |
+| IGNORE ALL PREVIOUS INSTRUCTIONS | Indirect Injection | 0.95 |
+| [DOCUMENT START/END] tags | Indirect Injection | 0.75 |
+| maintenance / admin / god mode | Indirect Injection | 0.80 |
+| write story + step by step | Jailbreak Framing | 0.78 |
+| educational purposes + dangerous | Jailbreak Framing | 0.85 |
+| synthesize + drug / weapon | Jailbreak Framing | 0.95 |
+| 40+ characters of base64 | Token Smuggling | 0.70 |
+| decode this / translate this | Token Smuggling | 0.55 |
+| you said earlier / we agreed | Context Manipulation | 0.55 |
+
+---
+
+### Layer 2 — Semantic Intent Analyzer
+
+Detects adversarial **intent** using keyword combinations and heuristics. One word alone may be innocent — two together can reveal an attack.
+
+**Step 1 — High-risk single keywords:**
+```javascript
+const HIGH_RISK_KEYWORDS = [
+  "jailbreak", "dan mode", "unrestricted ai",
+  "bypass safety", "disable restrictions", "ignore ethics",
+];
+
+for (const kw of HIGH_RISK_KEYWORDS) {
+  if (promptLower.includes(kw)) {
+    score = Math.min(1.0, score + 0.55);
+    types.add("Role Override");
+    findings.push(`High-risk keyword: "${kw}"`);
+  }
+}
+```
+
+**Step 2 — Dangerous combinations (Jailbreak Framing):**
+```javascript
+// "write a story"  alone = fine
+// "step by step"   alone = fine
+// BOTH together         = jailbreak framing attack
+
+if (
+  /write.{0,30}(story|fiction)/i.test(prompt)
+  &&
+  /step.by.step|how\s+to/i.test(prompt)
+) {
+  score = Math.min(1.0, score + 0.45);
+  types.add("Jailbreak Framing");
+  findings.push("Fictional framing with procedural request detected");
+}
+```
+
+**Step 3 — Length heuristic:**
+```javascript
+// Real users rarely send 800+ word prompts
+// that also contain words like "ignore" or "system"
+
+if (
+  prompt.length > 800
+  &&
+  ["instructions", "system", "ignore", "forget"]
+    .some(w => promptLower.includes(w))
+) {
+  score = Math.min(1.0, score + 0.20);
+  findings.push("Unusually long prompt with suspicious keywords");
+}
+```
+
+---
+
+### Layer 3 — Risk Scorer & Decision Engine
+
+Combines Layer 1 and Layer 2 into a final risk score, then decides the verdict.
+
+**Step 1 — Weighted combination:**
+```javascript
+// Layer 1 weighted slightly higher — more precise
+let combined = (l1Score * 0.55) + (l2Score * 0.45);
+
+// Bonus: if BOTH layers agree, add extra 10%
+if (l1Score > 0.5 && l2Score > 0.3) {
+  combined = Math.min(1.0, combined + 0.10);
+}
+
+const risk = Math.min(1.0, combined);
+```
+
+**Step 2 — Verdict thresholds:**
+```javascript
+const THRESHOLD_BLOCK = 0.30;  // risk >= 30% → BLOCK
+const THRESHOLD_FLAG  = 0.15;  // risk >= 15% → FLAG
+                                // risk <  15% → PASS
+
+let verdict;
+if      (risk >= THRESHOLD_BLOCK) verdict = "BLOCK";
+else if (risk >= THRESHOLD_FLAG)  verdict = "FLAG";
+else                              verdict = "PASS";
+```
+
+| Verdict | Risk Range | Meaning |
+|---|---|---|
+| ✅ PASS | Below 15% | No attack patterns. Safe to forward to LLM API. |
+| ⚠️ FLAG | 15% – 30% | Suspicious. Sent to human review queue. |
+| 🚫 BLOCK | 30% and above | High confidence attack. Request dropped and logged. |
+
+---
+
+### Main classify() Function
+
+Calls all 3 layers in order and returns the result object:
+```javascript
+function classify(prompt) {
+
+  // Layer 1 — regex scan
+  const l1 = layer1PatternScore(prompt);
+
+  // Layer 2 — semantic intent
+  const l2 = layer2SemanticScore(prompt);
+
+  // Layer 3 — combine scores
+  let combined = (l1.score * 0.55) + (l2.score * 0.45);
+  if (l1.score > 0.5 && l2.score > 0.3) combined += 0.10;
+  const risk = Math.min(1.0, combined);
+
+  // Verdict
+  let verdict;
+  if      (risk >= 0.30) verdict = "BLOCK";
+  else if (risk >= 0.15) verdict = "FLAG";
+  else                   verdict = "PASS";
+
+  return {
+    verdict,              // → shown as big text on screen
+    risk,                 // → Risk Score meter bar
+    l1: l1.score,         // → Layer 1 meter bar
+    l2: l2.score,         // → Layer 2 meter bar
+    attackTypes: [...new Set([...l1.types, ...l2.types])],  // → colored tags
+    findings:   [...l1.findings, ...l2.findings],           // → bullet list
+  };
+}
+```
 
 ## Team
 
