@@ -97,5 +97,5 @@ python tests/test_all.py
 
 Built by **Team Garuda** 
 
-##live demo link
+## live demo link
 https://vkd-cyber.github.io/prompt-shield/
