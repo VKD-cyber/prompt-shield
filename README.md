@@ -297,6 +297,102 @@ function classify(prompt) {
   };
 }
 ```
+## Why JavaScript Instead of Python
+
+Most security tools are built in Python — and Prompt Injection Shield has a full Python implementation too. But the live demo and browser-based classifier are written in **pure JavaScript**, and that was a deliberate choice.
+
+---
+
+### The Core Reason — Zero Installation
+
+A hackathon judge should be able to evaluate your project in 30 seconds. With Python, they would need to:
+```
+1. Install Python
+2. Install dependencies (pip install -r requirements.txt)
+3. Run a server or script
+4. Open a browser and navigate to localhost
+```
+
+With JavaScript running in HTML:
+```
+1. Open the file
+```
+
+That difference matters enormously in a hackathon setting where judges are evaluating dozens of projects under time pressure.
+
+---
+
+### Side-by-Side Comparison
+
+| | Python Version | JavaScript Version |
+|---|---|---|
+| **Runs on** | Server / terminal | Directly in browser |
+| **Installation** | Python + pip packages | Nothing — open the file |
+| **Deployment** | Needs a server | Static file on GitHub Pages |
+| **Demo speed** | Clone → install → run | Click link → instant |
+| **ML models** | Can use real DistilBERT | Rule-based heuristics |
+| **Production use** | Yes — full backend | Yes — frontend validation |
+| **Offline use** | Yes | Yes |
+| **Hackathon demo** | Slower to show | Instant |
+
+---
+
+### Same Logic, Different Runtime
+
+The JavaScript classifier is not a simplified version — it is a **direct translation** of the Python logic into JavaScript syntax. Both files implement identical:
+
+- All 15 Layer 1 regex rules with the same patterns and scores
+- The same Layer 2 keyword list and combination heuristics
+- The same Layer 3 weighted scoring formula `(l1 * 0.55) + (l2 * 0.45)`
+- The same verdict thresholds — BLOCK at 0.30, FLAG at 0.15
+- The same base64 decode-before-scan approach for Token Smuggling
+```python
+# Python
+combined = (l1_score * 0.55) + (l2_score * 0.45)
+if l1_score > 0.5 and l2_score > 0.3:
+    combined = min(1.0, combined + 0.10)
+```
+```javascript
+// JavaScript — identical logic, different syntax
+let combined = (l1Score * 0.55) + (l2Score * 0.45);
+if (l1Score > 0.5 && l2Score > 0.3) {
+  combined = Math.min(1.0, combined + 0.10);
+}
+```
+
+The results are the same for every input. You can run both files on the same prompt and get the same verdict.
+
+---
+
+### Why Both Versions Exist
+
+The **Python version** (`classifier.py`) is the production-ready implementation. In a real deployment it would:
+- Run as a FastAPI or Flask middleware server
+- Use a fine-tuned DistilBERT model for Layer 2 instead of heuristics
+- Handle session tracking with a proper database
+- Log to a SIEM or alerting pipeline
+
+The **JavaScript version** (`classifier.js` / `index.html`) serves a different purpose:
+- Instant browser-based demo with no setup
+- Can be hosted for free on GitHub Pages as a static file
+- Works offline — no internet connection required after loading
+- Lets anyone interact with the classifier without installing anything
+- Acts as a **client-side pre-filter** in web apps before the request even leaves the browser
+
+In a production architecture both would run together — JavaScript catches obvious attacks on the client side before the request is sent, and Python catches the rest on the server side before the request reaches the LLM.
+```
+Browser (JS classifier)
+    → catches obvious attacks client-side
+    → remaining requests sent to server
+
+Server (Python classifier)
+    → catches subtle attacks server-side
+    → safe requests forwarded to LLM API
+    → LLM responses scanned before returning
+```
+
+This two-layer deployment gives you **defence in depth** — an attacker would need to bypass both the client-side and server-side classifiers to reach the model.
+
 
 ## Team
 
