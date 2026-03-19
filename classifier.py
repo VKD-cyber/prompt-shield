@@ -1,8 +1,5 @@
 """
 ========================================================
-  Prompt Injection Shield — Complete Classifier
-  Team AEGIS | Cybersecurity Hackathon 2026
-  
   All 3 layers in one file.
   Run: python classifier.py
 ========================================================
@@ -17,7 +14,6 @@ from datetime import datetime
 # ============================================================
 #  LAYER 1 — PATTERN MATCHING ENGINE
 #  Regex rules that scan the raw prompt text.
-#  Fast, <1ms latency.
 # ============================================================
 
 LAYER1_RULES = [
@@ -381,7 +377,6 @@ if __name__ == "__main__":
 
     print("=" * 60)
     print("  PROMPT INJECTION SHIELD — CLASSIFIER DEMO")
-    print("  Team AEGIS | Cybersecurity Hackathon 2026")
     print("=" * 60)
 
     for name, prompt in test_prompts:
